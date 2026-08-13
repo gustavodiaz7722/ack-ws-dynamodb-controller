@@ -28,8 +28,8 @@ type GlobalTableSpec struct {
 	// The global table name.
 	//
 	// Regex Pattern: `^[a-zA-Z0-9_.-]+$`
-	// +kubebuilder:validation:Required
-	GlobalTableName *string `json:"globalTableName"`
+	GlobalTableName *string                                  `json:"globalTableName,omitempty"`
+	GlobalTableRef  *ackv1alpha1.AWSResourceReferenceWrapper `json:"globalTableRef,omitempty"`
 	// The Regions where the global table needs to be created.
 	// +kubebuilder:validation:Required
 	ReplicationGroup []*Replica `json:"replicationGroup"`

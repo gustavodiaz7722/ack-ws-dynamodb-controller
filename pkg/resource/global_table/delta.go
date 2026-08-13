@@ -49,6 +49,9 @@ func newResourceDelta(
 			delta.Add("Spec.GlobalTableName", a.ko.Spec.GlobalTableName, b.ko.Spec.GlobalTableName)
 		}
 	}
+	if !equality.Semantic.Equalities.DeepEqual(a.ko.Spec.GlobalTableRef, b.ko.Spec.GlobalTableRef) {
+		delta.Add("Spec.GlobalTableRef", a.ko.Spec.GlobalTableRef, b.ko.Spec.GlobalTableRef)
+	}
 	if len(a.ko.Spec.ReplicationGroup) != len(b.ko.Spec.ReplicationGroup) {
 		delta.Add("Spec.ReplicationGroup", a.ko.Spec.ReplicationGroup, b.ko.Spec.ReplicationGroup)
 	} else if len(a.ko.Spec.ReplicationGroup) > 0 {

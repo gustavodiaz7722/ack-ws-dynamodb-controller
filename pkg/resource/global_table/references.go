@@ -17,9 +17,15 @@ package global_table
 
 import (
 	"context"
+	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	ackv1alpha1 "github.com/aws-controllers-k8s/runtime/apis/core/v1alpha1"
+	ackerr "github.com/aws-controllers-k8s/runtime/pkg/errors"
+	ackrt "github.com/aws-controllers-k8s/runtime/pkg/runtime"
 	acktypes "github.com/aws-controllers-k8s/runtime/pkg/types"
 
 	svcapitypes "github.com/aws-controllers-k8s/dynamodb-controller/apis/v1alpha1"
@@ -31,6 +37,10 @@ import (
 // values.
 func (rm *resourceManager) ClearResolvedReferences(res acktypes.AWSResource) acktypes.AWSResource {
 	ko := rm.concreteResource(res).ko.DeepCopy()
+
+	if ko.Spec.GlobalTableRef != nil {
+		ko.Spec.GlobalTableName = nil
+	}
 
 	return &resource{ko}
 }
@@ -47,11 +57,119 @@ func (rm *resourceManager) ResolveReferences(
 	apiReader client.Reader,
 	res acktypes.AWSResource,
 ) (acktypes.AWSResource, bool, error) {
-	return res, false, nil
+	ko := rm.concreteResource(res).ko
+
+	resourceHasReferences := false
+	err := validateReferenceFields(ko)
+	if fieldHasReferences, err := rm.resolveReferenceForGlobalTableName(ctx, apiReader, ko); err != nil {
+		return &resource{ko}, (resourceHasReferences || fieldHasReferences), err
+	} else {
+		resourceHasReferences = resourceHasReferences || fieldHasReferences
+	}
+
+	return &resource{ko}, resourceHasReferences, err
 }
 
 // validateReferenceFields validates the reference field and corresponding
 // identifier field.
 func validateReferenceFields(ko *svcapitypes.GlobalTable) error {
+
+	if ko.Spec.GlobalTableRef != nil && ko.Spec.GlobalTableName != nil {
+		return ackerr.ResourceReferenceAndIDNotSupportedFor("GlobalTableName", "GlobalTableRef")
+	}
+	if ko.Spec.GlobalTableRef == nil && ko.Spec.GlobalTableName == nil {
+		return ackerr.ResourceReferenceOrIDRequiredFor("GlobalTableName", "GlobalTableRef")
+	}
+	return nil
+}
+
+// resolveReferenceForGlobalTableName reads the resource referenced
+// from GlobalTableRef field and sets the GlobalTableName
+// from referenced resource. Returns a boolean indicating whether a reference
+// contains references, or an error
+func (rm *resourceManager) resolveReferenceForGlobalTableName(
+	ctx context.Context,
+	apiReader client.Reader,
+	ko *svcapitypes.GlobalTable,
+) (hasReferences bool, err error) {
+	if ko.Spec.GlobalTableRef != nil && ko.Spec.GlobalTableRef.From != nil {
+		hasReferences = true
+		arr := ko.Spec.GlobalTableRef.From
+		if arr.Name == nil || *arr.Name == "" {
+			return hasReferences, fmt.Errorf("provided resource reference is nil or empty: GlobalTableRef")
+		}
+		namespace, err := ackrt.ResolveCrossNamespaceReference(
+			ctx,
+			rm.cfg.EnableCrossNamespace,
+			&ko.Status.Conditions,
+			ackrt.CrossNamespaceRefKindResource,
+			ko.ObjectMeta.GetNamespace(),
+			arr.Namespace,
+			*arr.Name,
+		)
+		if err != nil {
+			return hasReferences, err
+		}
+		obj := &svcapitypes.Table{}
+		if err := getReferencedResourceState_Table(ctx, apiReader, obj, *arr.Name, namespace); err != nil {
+			return hasReferences, err
+		}
+		ko.Spec.GlobalTableName = (*string)(obj.Spec.TableName)
+	}
+
+	return hasReferences, nil
+}
+
+// getReferencedResourceState_Table looks up whether a referenced resource
+// exists and is in a ACK.ResourceSynced=True state. If the referenced resource does exist and is
+// in a Synced state, returns nil, otherwise returns `ackerr.ResourceReferenceTerminalFor` or
+// `ResourceReferenceNotSyncedFor` depending on if the resource is in a Terminal state.
+func getReferencedResourceState_Table(
+	ctx context.Context,
+	apiReader client.Reader,
+	obj *svcapitypes.Table,
+	name string, // the Kubernetes name of the referenced resource
+	namespace string, // the Kubernetes namespace of the referenced resource
+) error {
+	namespacedName := types.NamespacedName{
+		Namespace: namespace,
+		Name:      name,
+	}
+	err := apiReader.Get(ctx, namespacedName, obj)
+	if err != nil {
+		return err
+	}
+	var refResourceTerminal bool
+	for _, cond := range obj.Status.Conditions {
+		if cond.Type == ackv1alpha1.ConditionTypeTerminal &&
+			cond.Status == corev1.ConditionTrue {
+			return ackerr.ResourceReferenceTerminalFor(
+				"Table",
+				namespace, name)
+		}
+	}
+	if refResourceTerminal {
+		return ackerr.ResourceReferenceTerminalFor(
+			"Table",
+			namespace, name)
+	}
+	var refResourceSynced bool
+	for _, cond := range obj.Status.Conditions {
+		if cond.Type == ackv1alpha1.ConditionTypeResourceSynced &&
+			cond.Status == corev1.ConditionTrue {
+			refResourceSynced = true
+		}
+	}
+	if !refResourceSynced {
+		return ackerr.ResourceReferenceNotSyncedFor(
+			"Table",
+			namespace, name)
+	}
+	if obj.Spec.TableName == nil {
+		return ackerr.ResourceReferenceMissingTargetFieldFor(
+			"Table",
+			namespace, name,
+			"Spec.TableName")
+	}
 	return nil
 }

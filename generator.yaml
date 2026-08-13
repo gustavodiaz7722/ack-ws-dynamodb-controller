@@ -121,6 +121,11 @@ resources:
           json_path: .status.tableStatus
           type: string
   GlobalTable:
+    fields:
+      GlobalTableName:
+        references:
+          resource: Table
+          path: Spec.TableName
     exceptions:
       errors:
         404:
@@ -136,6 +141,11 @@ resources:
           in:
             - ACTIVE
   Backup:
+    fields:
+      TableName:
+        references:
+          resource: Table
+          path: Spec.TableName
     exceptions:
       errors:
         404:
